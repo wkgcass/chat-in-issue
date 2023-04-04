@@ -18,12 +18,12 @@ const ROLE_ASSISTANT = 'assistant';
 const ROLE_SYSTEM = 'system';
 const MODEL = 'gpt-3.5-turbo';
 
-const ERR_COMMENT_NOT_PERMITTED = DROP_PREFIX + ' ' +
+const ERR_COMMENT_NOT_PERMITTED = DROP_PREFIX + '\n\n' +
     'Your current Github account is not permitted to trigger OPENAI requests.  \n' +
     'Please consult the repository owner for more info.';
-const ERR_COMMENT_REQUEST_OPENAI_FAILED = DROP_PREFIX + ' ' +
+const ERR_COMMENT_REQUEST_OPENAI_FAILED = DROP_PREFIX + '\n\n' +
     'Request OPENAI failed.';
-const ERR_COMMENT_UNABLE_TO_BUILD_PROMPT = DROP_PREFIX + ' ' +
+const ERR_COMMENT_UNABLE_TO_BUILD_PROMPT = DROP_PREFIX + '\n\n' +
     'Unable to build prompt.';
 
 const SEPARATOR = 'The above messages are the beginning of a conversation context, ' +
@@ -147,12 +147,12 @@ async function handle(msgs, inputs) {
         }
     } catch (e) {
         try {
-            addComment(ERR_COMMENT_REQUEST_OPENAI_FAILED + '\n' + inspect(e), inputs);
+            addComment(ERR_COMMENT_REQUEST_OPENAI_FAILED + '\n```\n' + inspect(e) + '\n```\n', inputs);
         } catch (ignore) { }
         throw e;
     }
 
-    addComment(ASSISTANT_PREFIX + ' ' + result, inputs);
+    addComment(ASSISTANT_PREFIX + '\n\n' + result, inputs);
 }
 
 function checkPrefix(msg, prefix) {
