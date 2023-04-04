@@ -61,6 +61,10 @@ The key used to call the OpenAI API, generally prefixed with "sk-".
 
 It is recommended to configure this key in "Secrets".
 
+#### Model
+
+The name of the AI model being used. Default is `gpt-3.5-turbo`.
+
 #### issue-number
 
 The issue which triggered the event. By default, `${{ github.event.issue.number }}` is used.

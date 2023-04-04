@@ -16844,7 +16844,7 @@ const SUBMIT_ONLY_MESSAGE = 'submit';
 
 const ROLE_ASSISTANT = 'assistant';
 const ROLE_SYSTEM = 'system';
-const MODEL = 'gpt-3.5-turbo';
+const DEFAULT_MODEL = 'gpt-3.5-turbo';
 
 const ERR_COMMENT_NOT_PERMITTED = DROP_PREFIX + '\n\n' +
     'Your current Github account is not permitted to trigger OPENAI requests.  \n' +
@@ -16959,7 +16959,7 @@ async function handle(msgs, inputs) {
         });
         const api = new openai.OpenAIApi(configuration);
         const completion = await api.createChatCompletion({
-            model: MODEL,
+            model: inputs.model,
             messages: openaiMsgs,
         });
         core.debug(`chat completion result ${inspectJson(completion.data)}`);
@@ -17110,6 +17110,7 @@ async function run() {
     const inputs = {
         token: core.getInput("token"),
         openaiKey: core.getInput("openai-key"),
+        model: core.getInput("model") || DEFAULT_MODEL,
         issueNumber: core.getInput("issue-number"),
         commentId: core.getInput("comment-id"),
         prefix: prefix,

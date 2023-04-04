@@ -57,6 +57,10 @@ Github token。默认使用`${{ github.token }}`，需要配置读写权限（�
 
 推荐将该key配置在"Secrets"中。
 
+#### model
+
+使用的AI模型名。默认为`gpt-3.5-turbo`。
+
 #### issue-number
 
 触发事件的issue。默认使用`${{ github.event.issue.number }}`。

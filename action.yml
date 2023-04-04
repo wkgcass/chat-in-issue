@@ -6,6 +6,9 @@ inputs:
     default: ${{ github.token }}
   openai-key:
     description: 'Openai API key, usually starts with "sk-".'
+  model:
+    description: 'Openai chat completion model.'
+    default: 'gpt-3.5-turbo'
   issue-number:
     description: 'The created issue.'
     default: ${{ github.event.issue.number }}
