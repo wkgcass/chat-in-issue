@@ -43,7 +43,7 @@ If your repository is a public repository, it is recommended to configure `user-
 
 The following configurations are available:
 
-#### token
+### ⚙️ token
 
 The Github token. By default, `${{ github.token }}` is used and requires read and write permissions (the default workflow token permission is read-only).
 
@@ -53,31 +53,31 @@ The following APIs will be called:
 * Read and write issue comments
 * Read issue comment list
 
-#### openai-key
+### ⚙️ openai-key
 
-**Required**
+_Required_
 
 The key used to call the OpenAI API, generally prefixed with "sk-".
 
 It is recommended to configure this key in "Secrets".
 
-#### Model
+### ⚙️ model
 
 The name of the AI model being used. Default is `gpt-3.5-turbo`.
 
-#### issue-number
+### ⚙️ issue-number
 
 The issue which triggered the event. By default, `${{ github.event.issue.number }}` is used.
 
 Generally, it can be omitted.
 
-#### comment-id
+### ⚙️ comment-id
 
 The comment which triggered the event. By default, `${{ github.event.comment.id }}` is used and may be empty.
 
 Generally, it can be omitted.
 
-#### prefix
+### ⚙️ prefix
 
 The content of the Issue or comment should start with "$prefix" configured here, in the format of "/$prefix:".  
 For example, if the prefix configuration is "chat", only issues or comments starting with "/chat:" will trigger the prompt.  
@@ -92,14 +92,14 @@ If the message contains the string "submit", the message itself will not be used
 
 The default value of `prefix` is `chat`.
 
-#### user-whitelist
+### ⚙️ user-whitelist
 
 User whitelist. Only users on the whitelist can trigger the prompt. Each line of the whitelist is a regular expression, and if any line's regular check passes, it counts as passed.  
 If not written, the default value `.*` (allow everything) will be used.
 
 It is recommended to configure the whitelist in `Variables`.
 
-#### prompt-limit
+### ⚙️ prompt-limit
 
 This configuration can be used in conjunction with `prompt-from-beginning-max`.
 
@@ -112,7 +112,7 @@ If a message is truncated, the entire message will be discarded.
 
 The default value is `3000`.
 
-#### prompt-from-beginning-max
+### ⚙️ prompt-from-beginning-max
 
 This configuration can be used in conjunction with `prompt-limit`.
 
