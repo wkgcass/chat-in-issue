@@ -37,4 +37,4 @@ inputs:
     default: '500'
 runs:
   using: 'node16'
-  main: 'src/main.js'
+  main: 'compile/index.js'
