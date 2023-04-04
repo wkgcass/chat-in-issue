@@ -38,3 +38,6 @@ inputs:
 runs:
   using: 'node16'
   main: 'compile/index.js'
+branding:
+  icon: 'message-circle'
+  color: 'green'
