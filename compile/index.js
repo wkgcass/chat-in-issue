@@ -17099,13 +17099,13 @@ async function run() {
     if (whitelist.length === 0) {
         whitelist = [/.*/];
     }
-    const promptLimit = parseInt(core.getInput("prompt-input") || '3000');
+    const promptLimit = parseInt(core.getInput("prompt-limit") || '3000');
     const promptFromBeginningMax = parseInt(core.getInput("prompt-from-beginning-max") || '500');
     if (isNaN(promptLimit) || promptLimit <= 0) {
         throw new Error('invalid prompt-limit: must > 0');
     }
     if (isNaN(promptFromBeginningMax) || promptFromBeginningMax < 0 || promptFromBeginningMax > promptLimit) {
-        throw new Error('invalid prompt-beginning-max: must >= 0 and <= promptLimit');
+        throw new Error('invalid prompt-from-beginning-max: must >= 0 and <= promptLimit');
     }
 
     const inputs = {
