@@ -1,0 +1,43 @@
+name: 'Chat in Issue'
+description: 'Use openai chat apis in github issues.'
+inputs:
+  token:
+    description: 'Github token.'
+    default: ${{ github.token }}
+  openai-key:
+    description: 'Openai API key, usually starts with "sk-".'
+  issue-number:
+    description: 'The created issue.'
+    default: ${{ github.event.issue.number }}
+  comment-id:
+    description: 'The created comment.'
+    default: ${{ github.event.comment.id }}
+  prefix:
+    description: |
+      The issues/comments content should start with "$prefix" with format "/$prefix:".
+      For example, if prefix is "chat", then only issues/comments start with "/chat:" would trigger a prompt.
+      Multiple prefixes can be separated with comma.
+      Please note that there are some built-in prefixes which you should not use:
+        /ai-says: The responding message, will be used as a "role=assistant" message in prompts.
+        /err:     Error messages. Issues/Comments start with this prefix will not be used as parts of the prompts.
+        /system:  Will not trigger a prompt, but will be used as a "role=system" message.
+      If a message contains string exactly "submit", this message itself will not be used as a part of the prompts.
+    default: 'chat'
+  user-whitelist:
+    description: 'User whitelist, each line for one user regexp.'
+    default: '.*'
+  prompt-limit:
+    description: |
+      Limits the total prompt length in characters.
+      The characters will be firstly taken from the beginning of the conversation until reaches the ${prompt-from-beginning-max} limit.
+      Then the characters will be taken from the end of the conversation.
+    default: '3000'
+  prompt-from-beginning-max:
+    description: 'Maxmium character length taken from the beginning of the conversation and used in the prompt.'
+    default: '500'
+outputs:
+  comment-id:
+    description: 'The id of the created comment or -1 if nothing created.'
+runs:
+  using: 'node16'
+  main: 'src/main.js'

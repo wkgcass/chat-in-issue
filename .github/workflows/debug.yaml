@@ -1,0 +1,26 @@
+name: debug
+run-name: '[chat-in-issue][${{ github.workflow }}] - ${{ github.event.issue.title }}'
+on:
+  issues:
+    types: ['opened']
+  issue_comment:
+    types: ['created']
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    env:
+      INPUT_TOKEN: ${{ github.token }}
+      INPUT_OPENAI-KEY: ${{ secrets.OPENAI_KEY }}
+      INPUT_ISSUE-NUMBER: ${{ github.event.issue.number }}
+      INPUT_COMMENT-ID: ${{ github.event.comment.id }}
+      INPUT_PREFIX: 'debug'
+      INPUT_USER-WHITELIST: ${{ vars.CHAT_IN_ISSUE_USER_WHITELIST }}
+      INPUT_PROMPT-LIMIT: '3000'
+      INPUT_PROMPT-FROM-BEGINNING-MAX: '500'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+      - run: npm install
+      - run: node src/main.js
