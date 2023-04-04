@@ -35,9 +35,6 @@ inputs:
   prompt-from-beginning-max:
     description: 'Maxmium character length taken from the beginning of the conversation and used in the prompt.'
     default: '500'
-outputs:
-  comment-id:
-    description: 'The id of the created comment or -1 if nothing created.'
 runs:
   using: 'node16'
   main: 'src/main.js'

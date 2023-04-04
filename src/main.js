@@ -34,6 +34,7 @@ async function addComment(result, inputs) {
     while ((n = result.indexOf(inputs.openaiKey)) !== -1) {
         result = result.substring(0, n) + '**OPENAI_KEY**' + result.substring(n + inputs.openaiKey.length);
     }
+    core.info(`adding comment: ${result}`);
 
     const comment = await inputs.octokit.rest.issues.createComment({
         owner: inputs.repo[0],
@@ -44,7 +45,6 @@ async function addComment(result, inputs) {
     core.debug(`created comment ${inspectJson(comment.data)}`);
 
     const id = comment.data.id;
-    console.log(id);
 }
 
 function formatOpenAIMsg(msg) {
@@ -70,6 +70,7 @@ function filterMsgs(msgs, inputs) {
     }
     core.debug(`total prompt characters: ${count}`);
     if (count < inputs.promptLimit) {
+        core.info(`total prompt characters ${count}`);
         return msgs;
     }
 
@@ -83,7 +84,7 @@ function filterMsgs(msgs, inputs) {
         count += n;
         ret.push(msg);
     }
-    core.debug(`beginning length: ${count}`);
+    core.info(`beginning prompt characters: ${count}`);
 
     const ending = [];
     for (let i = msgs.length - 1; i >= 0; --i) {
@@ -95,7 +96,7 @@ function filterMsgs(msgs, inputs) {
         count += n;
         ending.push(msg);
     }
-    core.debug(`total length after cutting: ${count}`);
+    core.info(`total characters after cutting: ${count}`);
 
     if (ending.length > 0) {
         ret.push({
@@ -134,6 +135,10 @@ async function handle(msgs, inputs) {
             messages: openaiMsgs,
         });
         core.debug(`chat completion result ${inspectJson(completion.data)}`);
+        try {
+            core.info(`token usage: ${inspect(completion.data.usage)}`);
+        } catch (ignore) { }
+
         const choices = completion.data.choices;
         core.debug(`choices ${inspectJson(choices)}`);
         result = choices[0].message.content;
@@ -314,7 +319,7 @@ async function run() {
         const prefixCheck = checkPrefix(body, inputs.prefix);
         if (!prefixCheck) {
             core.debug(`should not handle this msg`);
-            console.log("-1");
+            core.info(`this message will not be handled`);
             return;
         }
 
@@ -322,6 +327,7 @@ async function run() {
         const permission = getPermission(user, inputs);
         if (!permission.permitted) {
             core.debug(`not permitted: ${inspectJson(permission)}`);
+            core.info(`not permitted`);
             await addComment(ERR_COMMENT_NOT_PERMITTED, inputs);
             return;
         }
@@ -331,11 +337,12 @@ async function run() {
         const msgs = await getIssueMessage(inputs);
         if (msgs[0].type !== TYPE_PROMPT) {
             core.debug(`should not handle this msg: ${msgs[0].type}`);
-            console.log("-1");
+            core.info(`this message will not be handled`);
             return;
         }
         if (!msgs[0].permission.permitted) {
             core.debug(`not permitted: ${inspectJson(msgs[0].permission)}`);
+            core.info(`not permitted`);
             await addComment(ERR_COMMENT_NOT_PERMITTED, inputs);
             return;
         }
