@@ -16913,6 +16913,7 @@ function filterMsgs(msgs, inputs) {
         ret.push(msg);
     }
     core.info(`beginning prompt characters: ${count}`);
+    const hasBeginning = !!count;
 
     const ending = [];
     for (let i = msgs.length - 1; i >= 0; --i) {
@@ -16926,7 +16927,7 @@ function filterMsgs(msgs, inputs) {
     }
     core.info(`total characters after cutting: ${count}`);
 
-    if (ending.length > 0) {
+    if (hasBeginning && ending.length > 0) {
         ret.push({
             role: ROLE_SYSTEM,
             content: SEPARATOR,
