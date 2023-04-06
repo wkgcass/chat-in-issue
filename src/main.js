@@ -123,6 +123,19 @@ async function handle(msgs, inputs) {
         return;
     }
 
+    core.info(`prompt messages: [`);
+    const CONTENT_PRINT_LIMIT = 20;
+    const CONTENT_PRINT_CUT_SUFFIX = '...';
+    for (const msg of openaiMsgs) {
+        let content = msg.content;
+        if (content.length > CONTENT_PRINT_LIMIT + CONTENT_PRINT_CUT_SUFFIX.length) {
+            content = content.substring(0, CONTENT_PRINT_LIMIT) + CONTENT_PRINT_CUT_SUFFIX;
+        }
+        content = content.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        core.info(`  role=${msg.role} name=${msg.name} content=${content}`);
+    }
+    core.info(`]`);
+
     let result;
     try {
         const configuration = new openai.Configuration({
