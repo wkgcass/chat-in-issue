@@ -118,6 +118,8 @@ Prompt最大字符数限制。
 
 ### ⚙️ show-token-usage
 
+**Since v1.1**
+
 在评论中显示OpenAI token的用量。默认值`false`。
 
 用量会在单独的评论中展示，并且评论会以`/err:`开头。

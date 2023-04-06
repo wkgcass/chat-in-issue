@@ -122,6 +122,8 @@ The default value is `500`.
 
 ### ⚙️ show-token-usage
 
+**Since v1.1**
+
 Show the usage of the OpenAI token in comments. The default value is `false`.
 
 The usage will be displayed in a separate comment, and the comment will start with `/err:`.
