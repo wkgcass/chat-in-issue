@@ -43,17 +43,15 @@ async function addComment(result, inputs) {
         body: result,
     });
     core.debug(`created comment ${inspectJson(comment.data)}`);
-
-    const id = comment.data.id;
 }
 
 function formatOpenAIMsg(msg) {
     let role = 'user';
     let name = msg.user;
     let content = msg.msg;
-    if (msg.type == TYPE_ASSISTANT) {
+    if (msg.type === TYPE_ASSISTANT) {
         role = ROLE_ASSISTANT;
-    } else if (msg.type == TYPE_SYSTEM) {
+    } else if (msg.type === TYPE_SYSTEM) {
         role = ROLE_SYSTEM;
     }
     return {
@@ -105,7 +103,7 @@ function filterMsgs(msgs, inputs) {
             content: SEPARATOR,
         });
     }
-    for (var i = ending.length - 1; i >= 0; --i) {
+    for (let i = ending.length - 1; i >= 0; --i) {
         ret.push(ending[i]);
     }
 
@@ -121,7 +119,7 @@ async function handle(msgs, inputs) {
     core.debug(`req msgs: ${inspectJson(openaiMsgs)}`);
 
     if (openaiMsgs.length === 0) {
-        addComment(ERR_COMMENT_UNABLE_TO_BUILD_PROMPT, inputs);
+        await addComment(ERR_COMMENT_UNABLE_TO_BUILD_PROMPT, inputs);
         return;
     }
 
@@ -148,12 +146,12 @@ async function handle(msgs, inputs) {
         }
     } catch (e) {
         try {
-            addComment(ERR_COMMENT_REQUEST_OPENAI_FAILED + '\n```\n' + inspect(e) + '\n```\n', inputs);
+            await addComment(ERR_COMMENT_REQUEST_OPENAI_FAILED + '\n```\n' + inspect(e) + '\n```\n', inputs);
         } catch (ignore) { }
         throw e;
     }
 
-    addComment(ASSISTANT_PREFIX + '\n\n' + result, inputs);
+    await addComment(ASSISTANT_PREFIX + '\n\n' + result, inputs);
 }
 
 function checkPrefix(msg, prefix) {
@@ -358,7 +356,7 @@ async function main() {
     } catch (error) {
         core.debug(inspect(error));
         core.setFailed(error.message);
-        if (error.message == 'Resource not accessible by integration') {
+        if (error.message === 'Resource not accessible by integration') {
             core.error(`See this action's readme for details about this error`);
         }
     }
