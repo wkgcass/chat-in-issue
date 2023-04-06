@@ -86,6 +86,7 @@ async function handle(msgs, inputs) {
     core.info(`]`);
 
     let result;
+    let usage;
     try {
         const configuration = new openai.Configuration({
             apiKey: inputs.openaiKey,
@@ -96,8 +97,9 @@ async function handle(msgs, inputs) {
             messages: openaiMsgs,
         });
         core.debug(`chat completion result ${inspectJson(completion.data)}`);
+        usage = completion.data.usage;
         try {
-            core.info(`token usage: ${inspect(completion.data.usage)}`);
+            core.info(`token usage: ${inspect(usage)}`);
         } catch (ignore) { }
 
         const choices = completion.data.choices;
@@ -114,6 +116,13 @@ async function handle(msgs, inputs) {
     }
 
     await addComment(ASSISTANT_PREFIX + '\n\n' + result, inputs);
+    if (inputs.showTokenUsage) {
+        try {
+            await addComment(DROP_PREFIX + ' token usage: ' + JSON.stringify(usage), inputs);
+        } catch (e) {
+            core.debug(`failed to add comment for token usage: ${inspect(e)}`);
+        }
+    }
 }
 
 function checkPrefix(msg, prefix) {
@@ -326,6 +335,10 @@ async function run() {
     if (isNaN(promptFromBeginningMax) || promptFromBeginningMax < 0 || promptFromBeginningMax > promptLimit) {
         throw new Error('invalid prompt-from-beginning-max: must >= 0 and <= promptLimit');
     }
+    const showTokenUsageStr = core.getInput("show-token-usage") || 'false';
+    if (showTokenUsageStr !== 'true' && showTokenUsageStr !== 'false') {
+        throw new Error('invalid show-token-usage, must be "true" or "false"');
+    }
 
     const inputs = {
         token: core.getInput("token"),
@@ -337,6 +350,7 @@ async function run() {
         whitelist: whitelist,
         promptLimit: promptLimit,
         promptFromBeginningMax: promptFromBeginningMax,
+        showTokenUsage: showTokenUsageStr === 'true',
     };
     core.debug(`Inputs: ${inspectJson(inputs)}`);
     if (!inputs.token) {

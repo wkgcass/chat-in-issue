@@ -38,6 +38,9 @@ inputs:
   prompt-from-beginning-max:
     description: 'Maxmium character length taken from the beginning of the conversation and used in the prompt.'
     default: '500'
+  show-token-usage:
+    description: 'Show OpenAI token usage in comments.'
+    default: 'false'
 runs:
   using: 'node16'
   main: 'compile/index.js'

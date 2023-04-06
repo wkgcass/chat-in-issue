@@ -119,3 +119,9 @@ This configuration can be used in conjunction with `prompt-limit`.
 The maximum number of characters calculated from the beginning of the chat context.
 
 The default value is `500`.
+
+### ⚙️ show-token-usage
+
+Show the usage of the OpenAI token in comments. The default value is `false`.
+
+The usage will be displayed in a separate comment, and the comment will start with `/err:`.
