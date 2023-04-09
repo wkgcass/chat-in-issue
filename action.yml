@@ -31,16 +31,40 @@ inputs:
     default: '.*'
   prompt-limit:
     description: |
-      Limits the total prompt length in characters.
-      The characters will be firstly taken from the beginning of the conversation until reaches the ${prompt-from-beginning-max} limit.
-      Then the characters will be taken from the end of the conversation.
+      This configuration can be used in conjunction with `prompt-from-beginning-max`.
+
+      Maximum character limit for prompt messages.
+
+      If the total number of characters in the entire chat context does not exceed this value, all content will be used as prompt messages.
+      Otherwise, the program will take up to `$prompt-from-tail-initial-max` characters starting from the end;
+      then take up to `$prompt-from-beginning-max` characters starting from the front;
+      finally, take up to `$prompt-limit` characters starting from the final position determined in the first step.
+
+      If a message is truncated, the entire message will be discarded.
     default: '3000'
+  prompt-from-tail-initial-max:
+    description: 'Maximum characters length taken from the end of the conversation in the initial step and used in the prompt.'
+    default: '0'
   prompt-from-beginning-max:
-    description: 'Maxmium character length taken from the beginning of the conversation and used in the prompt.'
+    description: 'Maximum characters length taken from the beginning of the conversation and used in the prompt.'
     default: '500'
   show-token-usage:
     description: 'Show OpenAI token usage in comments.'
     default: 'false'
+  prompt-exclude-ai-response:
+    description: |
+      Exclude AI responses from prompt messages.
+      A system message will be automatically added before the last message to distinguish the previous messages and the last message.
+    default: 'false'
+  trim-mode:
+    description: |
+      Defines the method of trimming the text.
+      The following trim modes are supported:
+
+      1. `normal`: Treats the entire text as a string and trims the leading and trailing whitespaces of the string.
+      2. `none`: No trimming will be done.
+      3. `each-line`: Trims the leading and trailing whitespaces of each line and deletes empty lines.
+    default: 'normal'
 runs:
   using: 'node16'
   main: 'compile/index.js'

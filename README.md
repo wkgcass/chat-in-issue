@@ -103,14 +103,26 @@ It is recommended to configure the whitelist in `Variables`.
 
 This configuration can be used in conjunction with `prompt-from-beginning-max`.
 
-The maximum number of characters allowed in a Prompt.
+Maximum character limit for prompt messages. 
 
 If the total number of characters in the entire chat context does not exceed this value, all content will be used as prompt messages.  
-Otherwise, the prompt will be taken from the start, with a maximum of `$prompt-from-beginning-max` characters; then, starting from the end, a maximum of the number of characters specified in this configuration will be taken. 
+Otherwise, the program will take up to `$prompt-from-tail-initial-max` characters starting from the end;  
+then take up to `$prompt-from-beginning-max` characters starting from the front;  
+finally, take up to `$prompt-limit` characters starting from the final position determined in the first step.
 
 If a message is truncated, the entire message will be discarded.
 
 The default value is `3000`.
+
+### ⚙️ prompt-from-tail-initial-max
+
+**Since v1.2**
+
+This configuration can be used in conjunction with `prompt-limit`.
+
+The maximum number of characters counted from the end of the chat context when initially read.
+
+The default value is `0`.
 
 ### ⚙️ prompt-from-beginning-max
 
@@ -127,3 +139,39 @@ The default value is `500`.
 Show the usage of the OpenAI token in comments. The default value is `false`.
 
 The usage will be displayed in a separate comment, and the comment will start with `/err:`.
+
+### ⚙️ prompt-exclude-ai-response
+
+**Since v1.2**
+
+Exclude the content returned by AI in the prompt. The default value is `false`.
+
+If this function is enabled, the program will automatically insert a system message before the last message when necessary, which is used to distinguish the last message from previous messages.
+
+### ⚙️ trim-mode
+
+**Since v1.2**
+
+Defines the method of trimming the text. The default value is `normal`.
+
+The following trim modes are supported:
+
+1. `normal`: Treats the entire text as a string and trims the leading and trailing whitespaces of the string.
+2. `none`: No trimming will be done.
+3. `each-line`: Trims the leading and trailing whitespaces of each line and deletes empty lines.
+
+## Specialized Configuration for Specific Chat Contexts (Issues)
+
+**Since v1.2**
+
+By configuring specific labels in the issue, you can override the global configuration in the yaml file.
+
+The label name starts with `chat-in-issue/`, followed by the name of the configuration item, then followed by `=` and its required configuration value.
+
+The following configuration items support overriding with labels:
+
+* `chat-in-issue/prompt-limit={}`
+* `chat-in-issue/prompt-from-tail-initial-max={}`
+* `chat-in-issue/show-token-usage={}`
+* `chat-in-issue/show-token-usage={}`
+* `chat-in-issue/prompt-exclude-ai-response={}`
