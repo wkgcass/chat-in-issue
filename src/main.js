@@ -42,7 +42,8 @@ async function addComment(result, inputs) {
         issue_number: inputs.issueNumber,
         body: result,
     });
-    core.debug(`created comment ${inspectJson(comment.data)}`);
+    core.debug(`comment created`);
+    // core.debug(`created comment ${inspectJson(comment.data)}`);
 }
 
 function formatOpenAIMsg(msg) {
@@ -61,6 +62,15 @@ function formatOpenAIMsg(msg) {
     };
 }
 
+const CONTENT_PRINT_CUT_SUFFIX = '...';
+function cutMsgForDebug(content, limit) {
+    if (content.length > limit + CONTENT_PRINT_CUT_SUFFIX.length) {
+        content = content.substring(0, limit) + CONTENT_PRINT_CUT_SUFFIX;
+    }
+    content = content.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    return content;
+}
+
 async function handle(msgs, inputs) {
     core.debug(`msgs: ${inspectJson(msgs)}`);
 
@@ -74,15 +84,9 @@ async function handle(msgs, inputs) {
 
     core.info(`prompt messages: [`);
     const CONTENT_PRINT_LIMIT = 20;
-    const CONTENT_PRINT_CUT_SUFFIX = '...';
     for (const msg of openaiMsgs) {
-        let content = msg.content;
-        const len = content.length;
-        if (content.length > CONTENT_PRINT_LIMIT + CONTENT_PRINT_CUT_SUFFIX.length) {
-            content = content.substring(0, CONTENT_PRINT_LIMIT) + CONTENT_PRINT_CUT_SUFFIX;
-        }
-        content = content.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        core.info(`\trole=${msg.role}\tname=${msg.name}\tlen=${len}\tcontent=${content}`);
+        const content = cutMsgForDebug(msg.content, CONTENT_PRINT_LIMIT);
+        core.info(`\trole=${msg.role}\tname=${msg.name}\tlen=${content.length}\tcontent=${content}`);
     }
     core.info(`]`);
 
@@ -97,7 +101,7 @@ async function handle(msgs, inputs) {
             model: inputs.model,
             messages: openaiMsgs,
         });
-        core.debug(`chat completion result ${inspectJson(completion.data)}`);
+        // core.debug(`chat completion result ${inspectJson(completion.data)}`);
         usage = completion.data.usage;
         try {
             core.info(`token usage: ${inspect(usage)}`);
@@ -152,7 +156,7 @@ async function getIssue(inputs) {
         repo: inputs.repo[1],
         issue_number: inputs.issueNumber,
     });
-    core.debug(`issue: ${inspectJson(issue.data)}`);
+    // core.debug(`issue: ${inspectJson(issue.data)}`);
     return issue;
 }
 
@@ -164,7 +168,7 @@ async function listComments(inputs, page, perPage) {
         per_page: perPage,
         page: page,
     });
-    core.debug(`comments: ${inspectJson(comments.data)}`);
+    // core.debug(`comments: ${inspectJson(comments.data)}`);
     return comments;
 }
 
@@ -279,6 +283,11 @@ async function formatAllMessages(inputs) {
             }
             --page;
         }
+        core.debug(`step 1: handled messages ${tailMsgs.length}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        if (tailMsgs.length) {
+            const msg = cutMsgForDebug(tailMsgs[tailMsgs.length - 1].msg, 100);
+            core.debug(`step 1: last handled message: ${msg}`);
+        }
     } else {
         core.debug(`step 1: skipped`);
     }
@@ -355,6 +364,11 @@ async function formatAllMessages(inputs) {
             }
             ++page;
         }
+        core.debug(`step 2: handled messages ${msgs.length}, total = ${total} beginning = ${beginning}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        if (msgs.length) {
+            const msg = cutMsgForDebug(msgs[msgs.length - 1].msg, 100);
+            core.debug(`step 2: last handled message: ${msg}`);
+        }
 
         if (cursorFromBeginning + 1 === cursorFromTail) {
             core.debug(`step 2 cursor reaches step 1 cursor`);
@@ -406,8 +420,12 @@ async function formatAllMessages(inputs) {
             }
             --page;
         }
+        core.debug(`step 3: handled messages ${tailMsgs.length}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        if (msgs.length) {
+            const msg = cutMsgForDebug(tailMsgs[tailMsgs.length - 1].msg, 100);
+            core.debug(`step 3: last handled message: ${msg}`);
+        }
 
-        core.debug(`cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
         if (cursorFromBeginning + 1 === cursorFromTail) {
             core.debug(`no separator`);
         } else {
@@ -492,7 +510,7 @@ async function run() {
             repo: repo[1],
             comment_id: inputs.commentId,
         });
-        core.debug(`comment: ${inspectJson(comment.data)}`);
+        // core.debug(`comment: ${inspectJson(comment.data)}`);
         const body = comment.data.body || '';
         const prefixCheck = checkPrefix(body, inputs.prefix);
         if (!prefixCheck) {
