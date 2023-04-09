@@ -28,6 +28,8 @@ const ERR_COMMENT_UNABLE_TO_BUILD_PROMPT = DROP_PREFIX + '\n\n' +
 
 const SEPARATOR = 'The above messages are the beginning of a conversation context, ' +
     'and the below are the latest messages of this conversation context.';
+const TAIL_SEPARATOR = 'The above messages are the previous messages of a conversation context, ' +
+    'and the last message is the latest message in this conversation context.';
 
 async function addComment(result, inputs) {
     let n;
@@ -72,6 +74,19 @@ function cutMsgForDebug(content, limit) {
 }
 
 async function handle(msgs, inputs) {
+    if (inputs.promptExcludeAIResponse) {
+        if (msgs.length >= 2) {
+            const tmp = msgs[msgs.length - 2];
+            if (tmp.type === TYPE_PLAIN || tmp.type === TYPE_PROMPT) {
+                core.debug(`need to insert tail separator`);
+                msgs.splice(msgs.length - 1, 0, {
+                    type: TYPE_SYSTEM,
+                    msg: TAIL_SEPARATOR,
+                });
+            }
+        }
+    }
+
     core.debug(`msgs: ${inspectJson(msgs)}`);
 
     let openaiMsgs = msgs.map(msg => formatOpenAIMsg(msg));
@@ -239,6 +254,18 @@ function handleComment(c, inputs) {
     };
 }
 
+function needToHandle(msg, inputs) {
+    if (!msg) {
+        return false;
+    }
+    if (msg.type === TYPE_ASSISTANT) {
+        if (inputs.promptExcludeAIResponse) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // step 1: read msgs from tail with limit promptFromTailInitialMax
 // step 2: read msgs from the beginning with limit promptFromBeginningMax
 // step 3: read msgs from cursor of step 1 with total limit promptLimit
@@ -273,7 +300,7 @@ async function formatAllMessages(inputs) {
             for (let i = comments.data.length - 1; i >= 0; --i) {
                 const c = comments.data[i];
                 const msg = handleComment(c, inputs);
-                if (!msg) {
+                if (!needToHandle(msg, inputs)) {
                     core.debug(`comment ${c.id}/${cursorFromTail - 1} skipped`);
                     --cursorFromTail;
                     ++handledMessages;
@@ -352,7 +379,7 @@ async function formatAllMessages(inputs) {
                     break loop;
                 }
                 const msg = handleComment(c, inputs);
-                if (!msg) {
+                if (!needToHandle(msg, inputs)) {
                     core.debug(`comment ${c.id}/${cursorFromBeginning + 1} skipped`);
                     ++cursorFromBeginning;
                     ++handledMessages;
@@ -419,7 +446,7 @@ async function formatAllMessages(inputs) {
                 }
                 const c = comments.data[i];
                 const msg = handleComment(c, inputs);
-                if (!msg) {
+                if (!needToHandle(msg, inputs)) {
                     core.debug(`comment ${c.id}/${cursorFromTail - 1} skipped`);
                     --cursorFromTail;
                     ++handledMessages;
@@ -492,6 +519,7 @@ async function run() {
     let promptFromBeginningMax = parseInt(core.getInput("prompt-from-beginning-max") || '500');
     let promptFromTailInitialMax = parseInt(core.getInput("prompt-from-tail-initial-max") || '0');
     let showTokenUsageStr = core.getInput("show-token-usage") || 'false';
+    let promptExcludeAIResponseStr = core.getInput("prompt-exclude-ai-response") || 'false';
 
     for (const label of issue.data.labels) {
         let name = label.name;
@@ -513,6 +541,8 @@ async function run() {
             promptFromTailInitialMax = parseInt(value);
         } else if (key === 'show-token-usage') {
             showTokenUsageStr = value;
+        } else if (key === 'prompt-exclude-ai-response') {
+            promptExcludeAIResponseStr = value;
         } else {
             core.debug(`unknown key ${key}`);
             continue;
@@ -547,6 +577,10 @@ async function run() {
         throw new Error('invalid show-token-usage, must be "true" or "false"');
     }
 
+    if (promptExcludeAIResponseStr !== 'true' && promptExcludeAIResponseStr !== 'false') {
+        throw new Error('invalid prompt-exclude-ai-response, must be "true" or "false"');
+    }
+
     const __inputs = {
         openaiKey: core.getInput("openai-key"),
         model: core.getInput("model") || DEFAULT_MODEL,
@@ -557,6 +591,7 @@ async function run() {
         promptFromBeginningMax: promptFromBeginningMax,
         promptFromTailInitialMax: promptFromTailInitialMax,
         showTokenUsage: showTokenUsageStr === 'true',
+        promptExcludeAIResponse: promptExcludeAIResponseStr === 'true',
     };
     for (const k in __inputs) inputs[k] = __inputs[k];
     core.info(`inputs = ${inspectJson(inputs)}`);
