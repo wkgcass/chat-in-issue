@@ -31,6 +31,10 @@ const SEPARATOR = 'The above messages are the beginning of a conversation contex
 const TAIL_SEPARATOR = 'The above messages are the previous messages of a conversation context, ' +
     'and the last message is the latest message in this conversation context.';
 
+const TRIM_MODE_NORMAL = 'normal';
+const TRIM_MODE_EACH_LINE = 'each-line';
+const TRIM_MODE_NONE = 'none';
+
 async function addComment(result, inputs) {
     let n;
     while ((n = result.indexOf(inputs.openaiKey)) !== -1) {
@@ -145,17 +149,23 @@ async function handle(msgs, inputs) {
     }
 }
 
-function trim(s) {
-    return s.split('\n').map(line => line.trim()).filter(line => !!line).join('\n');
+function trim(s, inputs) {
+    if (inputs.trimMode === TRIM_MODE_EACH_LINE) {
+        return s.split('\n').map(line => line.trim()).filter(line => !!line).join('\n');
+    } else if (inputs.trimMode === TRIM_MODE_NONE) {
+        return s;
+    } else {
+        return s.trim();
+    }
 }
 
 // return null if no prefix matches
-function checkPrefix(msg, prefix) {
-    for (const p of prefix) {
+function checkPrefix(msg, inputs) {
+    for (const p of inputs.prefix) {
         const fmt = '/' + p + ':';
         if (msg.startsWith(fmt)) {
             core.debug(`msg starts with ${fmt}`);
-            return trim(msg.substring(fmt.length));
+            return trim(msg.substring(fmt.length), inputs);
         }
     }
     return null;
@@ -197,11 +207,11 @@ function extractMessageFromIssue(issue, inputs) {
     let issueUser = issue.data.user.login;
     let issueContent = issue.data.body;
     if (issueContent.startsWith(SYSTEM_PREFIX)) {
-        issueContent = trim(issueContent.substring(SYSTEM_PREFIX.length));
+        issueContent = trim(issueContent.substring(SYSTEM_PREFIX.length), inputs);
         type = TYPE_SYSTEM;
         issueUser = undefined;
     } else {
-        const fmtContent = checkPrefix(issueContent, inputs.prefix);
+        const fmtContent = checkPrefix(issueContent, inputs);
         if (fmtContent) {
             issueContent = fmtContent;
             type = TYPE_PROMPT;
@@ -225,22 +235,22 @@ function handleComment(c, inputs) {
     let msg = c.body || '';
     let type = TYPE_PLAIN;
     if (msg.startsWith(ASSISTANT_PREFIX)) {
-        msg = trim(msg.substring(ASSISTANT_PREFIX.length));
+        msg = trim(msg.substring(ASSISTANT_PREFIX.length), inputs);
         type = TYPE_ASSISTANT;
         user = ROLE_ASSISTANT;
     } else if (msg.startsWith(DROP_PREFIX)) {
         return;
     } else if (msg.startsWith(SYSTEM_PREFIX)) {
-        msg = trim(msg.substring(SYSTEM_PREFIX.length));
+        msg = trim(msg.substring(SYSTEM_PREFIX.length), inputs);
         type = TYPE_SYSTEM;
         user = undefined;
     } else {
-        const fmtMsg = checkPrefix(msg, inputs.prefix);
+        const fmtMsg = checkPrefix(msg, inputs);
         if (fmtMsg) {
             msg = fmtMsg;
             type = TYPE_PROMPT;
         } else {
-            msg = trim(msg);
+            msg = trim(msg, inputs);
         }
     }
     if (msg === SUBMIT_ONLY_MESSAGE) {
@@ -520,6 +530,7 @@ async function run() {
     let promptFromTailInitialMax = parseInt(core.getInput("prompt-from-tail-initial-max") || '0');
     let showTokenUsageStr = core.getInput("show-token-usage") || 'false';
     let promptExcludeAIResponseStr = core.getInput("prompt-exclude-ai-response") || 'false';
+    let trimMode = core.getInput("trim-mode") || TRIM_MODE_NORMAL;
 
     for (const label of issue.data.labels) {
         let name = label.name;
@@ -543,6 +554,8 @@ async function run() {
             showTokenUsageStr = value;
         } else if (key === 'prompt-exclude-ai-response') {
             promptExcludeAIResponseStr = value;
+        } else if (key === 'trim-mode') {
+            trimMode = value;
         } else {
             core.debug(`unknown key ${key}`);
             continue;
@@ -581,6 +594,14 @@ async function run() {
         throw new Error('invalid prompt-exclude-ai-response, must be "true" or "false"');
     }
 
+    if (trimMode !== TRIM_MODE_NORMAL &&
+        trimMode !== TRIM_MODE_EACH_LINE &&
+        trimMode !== TRIM_MODE_NONE) {
+        throw new Error(`unknown trim-mode, must be "${TRIM_MODE_NORMAL}"` +
+            ` or "${TRIM_MODE_EACH_LINE}" or ` +
+            `"${TRIM_MODE_NONE}"`);
+    }
+
     const __inputs = {
         openaiKey: core.getInput("openai-key"),
         model: core.getInput("model") || DEFAULT_MODEL,
@@ -592,6 +613,7 @@ async function run() {
         promptFromTailInitialMax: promptFromTailInitialMax,
         showTokenUsage: showTokenUsageStr === 'true',
         promptExcludeAIResponse: promptExcludeAIResponseStr === 'true',
+        trimMode: trimMode,
     };
     for (const k in __inputs) inputs[k] = __inputs[k];
     core.info(`inputs = ${inspectJson(inputs)}`);
@@ -607,7 +629,7 @@ async function run() {
         });
         // core.debug(`comment: ${inspectJson(comment.data)}`);
         const body = comment.data.body || '';
-        const prefixCheck = checkPrefix(body, inputs.prefix);
+        const prefixCheck = checkPrefix(body, inputs);
         if (!prefixCheck) {
             core.debug(`should not handle this msg`);
             core.info(`this message will not be handled`);
