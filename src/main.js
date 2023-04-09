@@ -120,7 +120,7 @@ async function handle(msgs, inputs) {
         try {
             await addComment(DROP_PREFIX + ' token usage: ' + JSON.stringify(usage), inputs);
         } catch (e) {
-            core.debug(`failed to add comment for token usage: ${inspect(e)}`);
+            core.error(`failed to add comment for token usage: ${inspect(e)}`);
         }
     }
 }
@@ -536,7 +536,7 @@ async function main() {
     try {
         await run();
     } catch (error) {
-        core.debug(inspect(error));
+        core.error(inspect(error));
         core.setFailed(error.message);
         if (error.message === 'Resource not accessible by integration') {
             core.error(`See this action's readme for details about this error`);
