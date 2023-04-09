@@ -145,13 +145,29 @@ function getPermission(user, inputs) {
     return { permitted: false };
 }
 
-async function getIssueMessage(inputs) {
+async function getIssue(inputs) {
     const issue = await inputs.octokit.rest.issues.get({
         owner: inputs.repo[0],
         repo: inputs.repo[1],
         issue_number: inputs.issueNumber,
     });
     core.debug(`issue: ${inspectJson(issue.data)}`);
+    return issue;
+}
+
+async function listComments(inputs, page, perPage) {
+    const comments = await inputs.octokit.rest.issues.listComments({
+        owner: inputs.repo[0],
+        repo: inputs.repo[1],
+        issue_number: inputs.issueNumber,
+        per_page: perPage,
+        page: page,
+    });
+    core.debug(`comments: ${inspectJson(comments.data)}`);
+    return comments;
+}
+
+function extractMessageFromIssue(issue, inputs) {
     let type = TYPE_PLAIN;
     let issueUser = issue.data.user.login;
     let issueContent = issue.data.body;
@@ -171,8 +187,12 @@ async function getIssueMessage(inputs) {
         msg: issueContent,
         type: type,
         permission: getPermission(issueUser, inputs),
-        __commentSize: issue.data.comments,
     }];
+}
+
+async function getIssueMessage(inputs) {
+    const issue = await getIssue(inputs);
+    return extractMessageFromIssue(issue, inputs);
 }
 
 function handleComment(c, inputs) {
@@ -209,99 +229,188 @@ function handleComment(c, inputs) {
     };
 }
 
+// step 1: read msgs from tail with limit promptFromTailInitialMax
+// step 2: read msgs from the beginning with limit promptFromBeginningMax
+// step 3: read msgs from cursor of step 1 with total limit promptLimit
+// and all msgs length should < promptLimit
 async function formatAllMessages(inputs) {
-    let msgs = await getIssueMessage(inputs);
-    const commentSize = msgs[0].__commentSize;
+    const issue = await getIssue(inputs);
+    let msgs = extractMessageFromIssue(issue, inputs);
+    const commentSize = issue.data.comments;
     core.debug(`commentSize: ${commentSize}`);
 
-    let beginning = msgs[0].msg.length;
-    let lastVisitedCommentId = null;
+    // cursors represent the comment already handled
+    let cursorFromTail = commentSize + 1;
+    let cursorFromBeginning = -1; // 0 means issue body
 
-    if (beginning > inputs.promptFromBeginningMax) {
-        core.debug(`the issue body len ${beginning} exceeds promptFromBeginningMax ${inputs.promptFromBeginningMax}`);
-        beginning = 0;
-        msgs = [];
-    } else if (beginning < inputs.promptFromBeginningMax) {
-        let page = 1;
+    let total = 0;
+
+    const tailMsgs = [];
+
+    if (inputs.promptFromTailInitialMax > 0) {
+        core.debug(`step 1: fetch messages from tail with limit ${inputs.promptFromTailInitialMax}`);
+
         const perPage = 11; // use a prime number
+        let page = parseInt(commentSize / perPage) + ((commentSize % perPage) === 0 ? 0 : 1); // last page
 
-        core.debug(`trying to get messages from the beginning...`);
-
-        beginningLoop:
-        while (true) {
-            const comments = await inputs.octokit.rest.issues.listComments({
-                owner: inputs.repo[0],
-                repo: inputs.repo[1],
-                issue_number: inputs.issueNumber,
-                per_page: perPage,
-                page: page,
-            });
-            core.debug(`comments ${inspectJson(comments.data)}`);
-            if (comments.data.length === 0) {
-                break;
-            }
-            for (const c of comments.data) {
-                const msg = handleComment(c, inputs);
-                if (!msg) {
-                    lastVisitedCommentId = c.id;
-                    continue;
-                }
-                if (beginning + msg.msg.length > inputs.promptFromBeginningMax) {
-                    break beginningLoop;
-                }
-                beginning += msg.msg.length;
-                lastVisitedCommentId = c.id;
-                msgs.push(msg);
-            }
-            ++page;
-        }
-    }
-
-    let total = beginning;
-    core.debug(`total = ${total}, msgs.length = ${msgs.length} before handling tail messages`);
-
-    if (total < inputs.promptLimit) {
-        const perPage = 29; // use a prime number
-        let page = parseInt(commentSize / perPage) + 1;
-
-        core.debug(`trying to get messages from the tail...`);
-
-        let reachesLastVisitedCommentId = false;
-        const tailMsgs = [];
-        tailLoop:
+        loop:
         while (true) {
             if (page <= 0) {
                 break;
             }
-            const comments = await inputs.octokit.rest.issues.listComments({
-                owner: inputs.repo[0],
-                repo: inputs.repo[1],
-                issue_number: inputs.issueNumber,
-                per_page: perPage,
-                page: page,
-            });
-            core.debug(`comments ${inspectJson(comments.data)}`);
+            const comments = await listComments(inputs, page, perPage);
             for (let i = comments.data.length - 1; i >= 0; --i) {
                 const c = comments.data[i];
-                if (c.id === lastVisitedCommentId) {
-                    core.debug(`reaches lastVisitedCommentId`);
-                    reachesLastVisitedCommentId = true;
-                    break tailLoop;
+                const msg = handleComment(c, inputs);
+                if (!msg) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} skipped`);
+                    --cursorFromTail;
+                    continue;
+                }
+                const len = msg.msg.length;
+                core.debug(`comment = ${c.id}/${cursorFromTail - 1}, len = ${len}, total (before adding) = ${total}`);
+                if (total + len > inputs.promptFromTailInitialMax) {
+                    break loop;
+                }
+                --cursorFromTail;
+                total += len;
+                tailMsgs.push(msg);
+            }
+            --page;
+        }
+    } else {
+        core.debug(`step 1: skipped`);
+    }
+
+    // check whether need to return after step 1
+    core.debug(`issue-body = ${msgs[0].msg.length}, total = ${total}, cursorFromTail = ${cursorFromTail}`);
+    if (msgs[0].msg.length + total > inputs.promptLimit) {
+        core.debug(`cannot hold issue body, remove it and return`);
+        msgs = [];
+        for (let i = tailMsgs.length - 1; i >= 0; --i) {
+            msgs.push(tailMsgs[i]);
+        }
+        return msgs;
+    }
+    if (cursorFromTail === 1) {
+        core.debug(`all comments handled`);
+        if (msgs[0].msg.length > inputs.promptFromBeginningMax) {
+            core.debug(`the issue body len ${msgs[0].msg.length} exceeds promptFromBeginningMax ${inputs.promptFromBeginningMax}`);
+            msgs = [];
+        } else {
+            core.debug(`the issue body is preserved`);
+        }
+        // no need to add separator
+        core.debug(`all comments fetched in step 1`);
+        for (let i = tailMsgs.length - 1; i >= 0; --i) {
+            msgs.push(tailMsgs[i]);
+        }
+        return msgs;
+    }
+
+    if (msgs[0].msg.length > inputs.promptFromBeginningMax) {
+        core.debug(`skip step 2: issue body ${msgs[0].msg.length} exceeds ${inputs.promptFromBeginningMax}`);
+        msgs = [];
+    } else {
+        core.debug(`step 2: trying to get messages from the beginning with limit ${inputs.promptFromBeginningMax}`);
+
+        total += msgs[0].msg.length; // count the issue body into total
+        let beginning = msgs[0].msg.length;
+        ++cursorFromBeginning; // issue body handled
+
+        let page = 1;
+        const perPage = 11; // use a prime number
+
+        loop:
+        while (true) {
+            const comments = await listComments(inputs, page, perPage);
+            if (comments.data.length === 0) { // loop done
+                break;
+            }
+            for (const c of comments.data) {
+                if (cursorFromBeginning + 1 === cursorFromTail) { // reaches
+                    break loop;
                 }
                 const msg = handleComment(c, inputs);
                 if (!msg) {
+                    core.debug(`comment ${c.id}/${cursorFromBeginning + 1} skipped`);
+                    ++cursorFromBeginning;
                     continue;
                 }
-                if (total + msg.msg.length > inputs.promptLimit) {
-                    break tailLoop;
+                const len = msg.msg.length;
+                core.debug(`comment = ${c.id}/${cursorFromBeginning + 1}, len = ${len}, beginning (before adding) = ${beginning}, total = ${total}`);
+                if (beginning + len > inputs.promptFromBeginningMax) {
+                    core.debug(`exceeds promptFromBeginningMax ${inputs.promptFromBeginningMax}`);
+                    break loop;
                 }
-                total += msg.msg.length;
+                if (total + len > inputs.promptLimit) {
+                    core.debug(`exceeds promptLimit ${inputs.promptLimit}`);
+                    break loop;
+                }
+                ++cursorFromBeginning;
+                beginning += len;
+                total += len;
+                msgs.push(msg);
+            }
+            ++page;
+        }
+
+        if (cursorFromBeginning + 1 === cursorFromTail) {
+            core.debug(`step 2 cursor reaches step 1 cursor`);
+            for (let i = tailMsgs.length - 1; i >= 0; --i) {
+                msgs.push(tailMsgs[i]);
+            }
+            return msgs;
+        }
+    }
+
+    core.debug(`before step 3: total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+
+    {
+        const perPage = 29; // use a prime number
+        let page = parseInt((cursorFromTail - 1) / perPage) + (((cursorFromTail - 1) % perPage === 0) ? 0 : 1);
+
+        core.debug(`step 3: trying to get messages from the tail...`);
+
+        let isFirstLoop = true;
+        loop:
+        while (true) {
+            if (page <= 0) {
+                break;
+            }
+            const comments = await listComments(inputs, page, perPage);
+            const initIndex = isFirstLoop ? (cursorFromTail - 1 - (page - 1) * perPage - 1) : (comments.data.length - 1);
+            if (isFirstLoop) {
+                core.debug(`step 3 initIndex = ${initIndex}`);
+            }
+            isFirstLoop = false;
+
+            for (let i = initIndex; i >= 0; --i) {
+                if (cursorFromBeginning + 1 === cursorFromTail) { // reaches
+                    break loop;
+                }
+                const c = comments.data[i];
+                const msg = handleComment(c, inputs);
+                if (!msg) {
+                    --cursorFromTail;
+                    continue;
+                }
+                const len = msg.msg.length;
+                if (total + len > inputs.promptLimit) {
+                    break loop;
+                }
+                --cursorFromTail;
+                total += len;
                 tailMsgs.push(msg);
             }
             --page;
         }
 
-        if (!reachesLastVisitedCommentId) {
+        core.debug(`cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        if (cursorFromBeginning + 1 === cursorFromTail) {
+            core.debug(`no separator`);
+        } else {
+            core.debug(`need separator`);
             msgs.push({
                 type: TYPE_SYSTEM,
                 msg: SEPARATOR,
@@ -329,11 +438,15 @@ async function run() {
     }
     const promptLimit = parseInt(core.getInput("prompt-limit") || '3000');
     const promptFromBeginningMax = parseInt(core.getInput("prompt-from-beginning-max") || '500');
+    const promptFromTailInitialMax = parseInt(core.getInput("prompt-from-tail-initial-max") || '0');
     if (isNaN(promptLimit) || promptLimit <= 0) {
         throw new Error('invalid prompt-limit: must > 0');
     }
     if (isNaN(promptFromBeginningMax) || promptFromBeginningMax < 0 || promptFromBeginningMax > promptLimit) {
         throw new Error('invalid prompt-from-beginning-max: must >= 0 and <= promptLimit');
+    }
+    if (isNaN(promptFromTailInitialMax) || promptFromTailInitialMax < 0 || promptFromTailInitialMax > promptLimit) {
+        throw new Error('invalid prompt-from-tail-initial-max: must >= 0 and <= promptLimit');
     }
     const showTokenUsageStr = core.getInput("show-token-usage") || 'false';
     if (showTokenUsageStr !== 'true' && showTokenUsageStr !== 'false') {
@@ -350,9 +463,10 @@ async function run() {
         whitelist: whitelist,
         promptLimit: promptLimit,
         promptFromBeginningMax: promptFromBeginningMax,
+        promptFromTailInitialMax: promptFromTailInitialMax,
         showTokenUsage: showTokenUsageStr === 'true',
     };
-    core.debug(`Inputs: ${inspectJson(inputs)}`);
+    core.info(`inputs = ${inspectJson(inputs)}`);
     if (!inputs.token) {
         throw new Error('missing token');
     }
