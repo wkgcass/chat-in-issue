@@ -17,6 +17,7 @@ jobs:
       INPUT_USER-WHITELIST: ${{ vars.CHAT_IN_ISSUE_USER_WHITELIST }}
       INPUT_PROMPT-LIMIT: '3000'
       INPUT_PROMPT-FROM-BEGINNING-MAX: '500'
+      INPUT_PROMPT-FROM-TAIL-INITIAL-MAX: '1000'
       INPUT_SHOW-TOKEN-USAGE: 'true'
     steps:
       - uses: actions/checkout@v3
