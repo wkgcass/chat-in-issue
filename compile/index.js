@@ -16856,6 +16856,12 @@ const ERR_COMMENT_UNABLE_TO_BUILD_PROMPT = DROP_PREFIX + '\n\n' +
 
 const SEPARATOR = 'The above messages are the beginning of a conversation context, ' +
     'and the below are the latest messages of this conversation context.';
+const TAIL_SEPARATOR = 'The above messages are the previous messages of a conversation context, ' +
+    'and the last message is the latest message in this conversation context.';
+
+const TRIM_MODE_NORMAL = 'normal';
+const TRIM_MODE_EACH_LINE = 'each-line';
+const TRIM_MODE_NONE = 'none';
 
 async function addComment(result, inputs) {
     let n;
@@ -16870,7 +16876,8 @@ async function addComment(result, inputs) {
         issue_number: inputs.issueNumber,
         body: result,
     });
-    core.debug(`created comment ${inspectJson(comment.data)}`);
+    core.debug(`comment created`);
+    // core.debug(`created comment ${inspectJson(comment.data)}`);
 }
 
 function formatOpenAIMsg(msg) {
@@ -16889,7 +16896,29 @@ function formatOpenAIMsg(msg) {
     };
 }
 
+const CONTENT_PRINT_CUT_SUFFIX = '...';
+function cutMsgForDebug(content, limit) {
+    if (content.length > limit + CONTENT_PRINT_CUT_SUFFIX.length) {
+        content = content.substring(0, limit) + CONTENT_PRINT_CUT_SUFFIX;
+    }
+    content = content.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    return content;
+}
+
 async function handle(msgs, inputs) {
+    if (inputs.promptExcludeAIResponse) {
+        if (msgs.length >= 2) {
+            const tmp = msgs[msgs.length - 2];
+            if (tmp.type === TYPE_PLAIN || tmp.type === TYPE_PROMPT) {
+                core.debug(`need to insert tail separator`);
+                msgs.splice(msgs.length - 1, 0, {
+                    type: TYPE_SYSTEM,
+                    msg: TAIL_SEPARATOR,
+                });
+            }
+        }
+    }
+
     core.debug(`msgs: ${inspectJson(msgs)}`);
 
     let openaiMsgs = msgs.map(msg => formatOpenAIMsg(msg));
@@ -16902,14 +16931,9 @@ async function handle(msgs, inputs) {
 
     core.info(`prompt messages: [`);
     const CONTENT_PRINT_LIMIT = 20;
-    const CONTENT_PRINT_CUT_SUFFIX = '...';
     for (const msg of openaiMsgs) {
-        let content = msg.content;
-        if (content.length > CONTENT_PRINT_LIMIT + CONTENT_PRINT_CUT_SUFFIX.length) {
-            content = content.substring(0, CONTENT_PRINT_LIMIT) + CONTENT_PRINT_CUT_SUFFIX;
-        }
-        content = content.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        core.info(`  role=${msg.role} name=${msg.name} content=${content}`);
+        const content = cutMsgForDebug(msg.content, CONTENT_PRINT_LIMIT);
+        core.info(`\trole=${msg.role}\tname=${msg.name}\tlen=${msg.content.length}\tcontent=${content}`);
     }
     core.info(`]`);
 
@@ -16924,7 +16948,7 @@ async function handle(msgs, inputs) {
             model: inputs.model,
             messages: openaiMsgs,
         });
-        core.debug(`chat completion result ${inspectJson(completion.data)}`);
+        // core.debug(`chat completion result ${inspectJson(completion.data)}`);
         usage = completion.data.usage;
         try {
             core.info(`token usage: ${inspect(usage)}`);
@@ -16948,17 +16972,28 @@ async function handle(msgs, inputs) {
         try {
             await addComment(DROP_PREFIX + ' token usage: ' + JSON.stringify(usage), inputs);
         } catch (e) {
-            core.debug(`failed to add comment for token usage: ${inspect(e)}`);
+            core.error(`failed to add comment for token usage: ${inspect(e)}`);
         }
     }
 }
 
-function checkPrefix(msg, prefix) {
-    for (const p of prefix) {
+function trim(s, inputs) {
+    if (inputs.trimMode === TRIM_MODE_EACH_LINE) {
+        return s.split('\n').map(line => line.trim()).filter(line => !!line).join('\n');
+    } else if (inputs.trimMode === TRIM_MODE_NONE) {
+        return s;
+    } else {
+        return s.trim();
+    }
+}
+
+// return null if no prefix matches
+function checkPrefix(msg, inputs) {
+    for (const p of inputs.prefix) {
         const fmt = '/' + p + ':';
         if (msg.startsWith(fmt)) {
             core.debug(`msg starts with ${fmt}`);
-            return msg.substring(fmt.length).trim();
+            return trim(msg.substring(fmt.length), inputs);
         }
     }
     return null;
@@ -16973,22 +17008,38 @@ function getPermission(user, inputs) {
     return { permitted: false };
 }
 
-async function getIssueMessage(inputs) {
+async function getIssue(inputs) {
     const issue = await inputs.octokit.rest.issues.get({
         owner: inputs.repo[0],
         repo: inputs.repo[1],
         issue_number: inputs.issueNumber,
     });
-    core.debug(`issue: ${inspectJson(issue.data)}`);
+    // core.debug(`issue: ${inspectJson(issue.data)}`);
+    return issue;
+}
+
+async function listComments(inputs, page, perPage) {
+    const comments = await inputs.octokit.rest.issues.listComments({
+        owner: inputs.repo[0],
+        repo: inputs.repo[1],
+        issue_number: inputs.issueNumber,
+        per_page: perPage,
+        page: page,
+    });
+    // core.debug(`comments: ${inspectJson(comments.data)}`);
+    return comments;
+}
+
+function extractMessageFromIssue(issue, inputs) {
     let type = TYPE_PLAIN;
     let issueUser = issue.data.user.login;
     let issueContent = issue.data.body;
     if (issueContent.startsWith(SYSTEM_PREFIX)) {
-        issueContent = issueContent.substring(SYSTEM_PREFIX.length).trim();
+        issueContent = trim(issueContent.substring(SYSTEM_PREFIX.length), inputs);
         type = TYPE_SYSTEM;
         issueUser = undefined;
     } else {
-        const fmtContent = checkPrefix(issueContent, inputs.prefix);
+        const fmtContent = checkPrefix(issueContent, inputs);
         if (fmtContent) {
             issueContent = fmtContent;
             type = TYPE_PROMPT;
@@ -16999,8 +17050,12 @@ async function getIssueMessage(inputs) {
         msg: issueContent,
         type: type,
         permission: getPermission(issueUser, inputs),
-        __commentSize: issue.data.comments,
     }];
+}
+
+async function getIssueMessage(inputs) {
+    const issue = await getIssue(inputs);
+    return extractMessageFromIssue(issue, inputs);
 }
 
 function handleComment(c, inputs) {
@@ -17008,22 +17063,22 @@ function handleComment(c, inputs) {
     let msg = c.body || '';
     let type = TYPE_PLAIN;
     if (msg.startsWith(ASSISTANT_PREFIX)) {
-        msg = msg.substring(ASSISTANT_PREFIX.length).trim();
+        msg = trim(msg.substring(ASSISTANT_PREFIX.length), inputs);
         type = TYPE_ASSISTANT;
         user = ROLE_ASSISTANT;
     } else if (msg.startsWith(DROP_PREFIX)) {
         return;
     } else if (msg.startsWith(SYSTEM_PREFIX)) {
-        msg = msg.substring(SYSTEM_PREFIX.length).trim();
+        msg = trim(msg.substring(SYSTEM_PREFIX.length), inputs);
         type = TYPE_SYSTEM;
         user = undefined;
     } else {
-        const fmtMsg = checkPrefix(msg, inputs.prefix);
+        const fmtMsg = checkPrefix(msg, inputs);
         if (fmtMsg) {
             msg = fmtMsg;
             type = TYPE_PROMPT;
         } else {
-            msg = msg.trim();
+            msg = trim(msg, inputs);
         }
     }
     if (msg === SUBMIT_ONLY_MESSAGE) {
@@ -17037,99 +17092,227 @@ function handleComment(c, inputs) {
     };
 }
 
-async function formatAllMessages(inputs) {
-    let msgs = await getIssueMessage(inputs);
-    const commentSize = msgs[0].__commentSize;
-    core.debug(`commentSize: ${commentSize}`);
-
-    let beginning = msgs[0].msg.length;
-    let lastVisitedCommentId = null;
-
-    if (beginning > inputs.promptFromBeginningMax) {
-        core.debug(`the issue body len ${beginning} exceeds promptFromBeginningMax ${inputs.promptFromBeginningMax}`);
-        beginning = 0;
-        msgs = [];
-    } else if (beginning < inputs.promptFromBeginningMax) {
-        let page = 1;
-        const perPage = 11; // use a prime number
-
-        core.debug(`trying to get messages from the beginning...`);
-
-        beginningLoop:
-        while (true) {
-            const comments = await inputs.octokit.rest.issues.listComments({
-                owner: inputs.repo[0],
-                repo: inputs.repo[1],
-                issue_number: inputs.issueNumber,
-                per_page: perPage,
-                page: page,
-            });
-            core.debug(`comments ${inspectJson(comments.data)}`);
-            if (comments.data.length === 0) {
-                break;
-            }
-            for (const c of comments.data) {
-                const msg = handleComment(c, inputs);
-                if (!msg) {
-                    lastVisitedCommentId = c.id;
-                    continue;
-                }
-                if (beginning + msg.msg.length > inputs.promptFromBeginningMax) {
-                    break beginningLoop;
-                }
-                beginning += msg.msg.length;
-                lastVisitedCommentId = c.id;
-                msgs.push(msg);
-            }
-            ++page;
+function needToHandle(msg, inputs) {
+    if (!msg) {
+        return false;
+    }
+    if (msg.type === TYPE_ASSISTANT) {
+        if (inputs.promptExcludeAIResponse) {
+            return false;
         }
     }
+    return true;
+}
 
-    let total = beginning;
-    core.debug(`total = ${total}, msgs.length = ${msgs.length} before handling tail messages`);
+// step 1: read msgs from tail with limit promptFromTailInitialMax
+// step 2: read msgs from the beginning with limit promptFromBeginningMax
+// step 3: read msgs from cursor of step 1 with total limit promptLimit
+// and all msgs length should < promptLimit
+async function formatAllMessages(inputs) {
+    const issue = await getIssue(inputs);
+    let msgs = extractMessageFromIssue(issue, inputs);
+    const commentSize = issue.data.comments;
+    core.debug(`commentSize: ${commentSize}`);
 
-    if (total < inputs.promptLimit) {
-        const perPage = 29; // use a prime number
-        let page = parseInt(commentSize / perPage) + 1;
+    // cursors represent the comment already handled
+    let cursorFromTail = commentSize + 1;
+    let cursorFromBeginning = -1; // 0 means issue body
 
-        core.debug(`trying to get messages from the tail...`);
+    let total = 0;
 
-        let reachesLastVisitedCommentId = false;
-        const tailMsgs = [];
-        tailLoop:
+    const tailMsgs = [];
+
+    if (inputs.promptFromTailInitialMax > 0) {
+        core.debug(`step 1: fetch messages from tail with limit ${inputs.promptFromTailInitialMax}`);
+
+        const perPage = 11; // use a prime number
+        let page = parseInt(commentSize / perPage) + ((commentSize % perPage) === 0 ? 0 : 1); // last page
+        let handledMessages = 0;
+
+        loop:
         while (true) {
             if (page <= 0) {
                 break;
             }
-            const comments = await inputs.octokit.rest.issues.listComments({
-                owner: inputs.repo[0],
-                repo: inputs.repo[1],
-                issue_number: inputs.issueNumber,
-                per_page: perPage,
-                page: page,
-            });
-            core.debug(`comments ${inspectJson(comments.data)}`);
+            const comments = await listComments(inputs, page, perPage);
             for (let i = comments.data.length - 1; i >= 0; --i) {
                 const c = comments.data[i];
-                if (c.id === lastVisitedCommentId) {
-                    core.debug(`reaches lastVisitedCommentId`);
-                    reachesLastVisitedCommentId = true;
-                    break tailLoop;
-                }
                 const msg = handleComment(c, inputs);
-                if (!msg) {
+                if (!needToHandle(msg, inputs)) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} skipped`);
+                    --cursorFromTail;
+                    ++handledMessages;
                     continue;
                 }
-                if (total + msg.msg.length > inputs.promptLimit) {
-                    break tailLoop;
+                const len = msg.msg.length;
+                core.debug(`comment = ${c.id}/${cursorFromTail - 1}, len = ${len}, total (before adding) = ${total}`);
+                if (total + len > inputs.promptFromTailInitialMax) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} cannot be added, will exceed promptFromTailInitialMax, ${total} + ${len} > ${inputs.promptFromTailInitialMax}`);
+                    break loop;
                 }
-                total += msg.msg.length;
+                ++handledMessages;
+                --cursorFromTail;
+                total += len;
                 tailMsgs.push(msg);
             }
             --page;
         }
+        core.debug(`step 1: handled messages ${handledMessages}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        if (tailMsgs.length) {
+            const msg = cutMsgForDebug(tailMsgs[tailMsgs.length - 1].msg, 100);
+            core.debug(`step 1: last handled message: ${msg}`);
+        }
+    } else {
+        core.debug(`step 1: skipped`);
+    }
 
-        if (!reachesLastVisitedCommentId) {
+    // check whether need to return after step 1
+    core.debug(`issue-body = ${msgs[0].msg.length}, total = ${total}, cursorFromTail = ${cursorFromTail}`);
+    if (msgs[0].msg.length + total > inputs.promptLimit) {
+        core.debug(`cannot hold issue body, remove it and return`);
+        msgs = [];
+        for (let i = tailMsgs.length - 1; i >= 0; --i) {
+            msgs.push(tailMsgs[i]);
+        }
+        return msgs;
+    }
+    if (cursorFromTail === 1) {
+        core.debug(`all comments handled`);
+        if (msgs[0].msg.length > inputs.promptFromBeginningMax) {
+            core.debug(`the issue body len ${msgs[0].msg.length} exceeds promptFromBeginningMax ${inputs.promptFromBeginningMax}`);
+            msgs = [];
+        } else {
+            core.debug(`the issue body is preserved`);
+        }
+        // no need to add separator
+        core.debug(`all comments fetched in step 1`);
+        for (let i = tailMsgs.length - 1; i >= 0; --i) {
+            msgs.push(tailMsgs[i]);
+        }
+        return msgs;
+    }
+
+    if (msgs[0].msg.length > inputs.promptFromBeginningMax) {
+        core.debug(`skip step 2: issue body ${msgs[0].msg.length} exceeds ${inputs.promptFromBeginningMax}`);
+        msgs = [];
+    } else {
+        core.debug(`step 2: trying to get messages from the beginning with limit ${inputs.promptFromBeginningMax}`);
+
+        total += msgs[0].msg.length; // count the issue body into total
+        let beginning = msgs[0].msg.length;
+        ++cursorFromBeginning; // issue body handled
+        let handledMessages = 1;
+
+        let page = 1;
+        const perPage = 11; // use a prime number
+
+        loop:
+        while (true) {
+            const comments = await listComments(inputs, page, perPage);
+            if (comments.data.length === 0) { // loop done
+                break;
+            }
+            for (const c of comments.data) {
+                if (cursorFromBeginning + 1 === cursorFromTail) { // reaches
+                    break loop;
+                }
+                const msg = handleComment(c, inputs);
+                if (!needToHandle(msg, inputs)) {
+                    core.debug(`comment ${c.id}/${cursorFromBeginning + 1} skipped`);
+                    ++cursorFromBeginning;
+                    ++handledMessages;
+                    continue;
+                }
+                const len = msg.msg.length;
+                core.debug(`comment = ${c.id}/${cursorFromBeginning + 1}, len = ${len}, beginning (before adding) = ${beginning}, total = ${total}`);
+                if (beginning + len > inputs.promptFromBeginningMax) {
+                    core.debug(`comment ${c.id}/${cursorFromBeginning + 1} cannot be added, will exceed promptFromBeginningMax, ${beginning} + ${len} > ${inputs.promptFromBeginningMax}`);
+                    break loop;
+                }
+                if (total + len > inputs.promptLimit) {
+                    core.debug(`comment ${c.id}/${cursorFromBeginning + 1} cannot be added, will exceed promptLimit, ${total} + ${len} > ${inputs.promptLimit}`);
+                    break loop;
+                }
+                ++handledMessages;
+                ++cursorFromBeginning;
+                beginning += len;
+                total += len;
+                msgs.push(msg);
+            }
+            ++page;
+        }
+        core.debug(`step 2: handled messages ${handledMessages}, total = ${total} beginning = ${beginning}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        if (msgs.length) {
+            const msg = cutMsgForDebug(msgs[msgs.length - 1].msg, 100);
+            core.debug(`step 2: last handled message: ${msg}`);
+        }
+
+        if (cursorFromBeginning + 1 === cursorFromTail) {
+            core.debug(`step 2 cursor reaches step 1 cursor`);
+            for (let i = tailMsgs.length - 1; i >= 0; --i) {
+                msgs.push(tailMsgs[i]);
+            }
+            return msgs;
+        }
+    }
+
+    core.debug(`before step 3: total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+
+    {
+        const perPage = 29; // use a prime number
+        let page = parseInt((cursorFromTail - 1) / perPage) + (((cursorFromTail - 1) % perPage === 0) ? 0 : 1);
+        let handledMessages = 0;
+
+        core.debug(`step 3: trying to get messages from the tail with limit ${inputs.promptLimit}, cursorFromTail=${cursorFromTail}`);
+
+        let isFirstLoop = true;
+        loop:
+        while (true) {
+            if (page <= 0) {
+                break;
+            }
+            const comments = await listComments(inputs, page, perPage);
+            const initIndex = isFirstLoop ? (cursorFromTail - 1 - (page - 1) * perPage - 1) : (comments.data.length - 1);
+            if (isFirstLoop) {
+                core.debug(`step 3 initIndex = ${initIndex}`);
+            }
+            isFirstLoop = false;
+
+            for (let i = initIndex; i >= 0; --i) {
+                if (cursorFromBeginning + 1 === cursorFromTail) { // reaches
+                    break loop;
+                }
+                const c = comments.data[i];
+                const msg = handleComment(c, inputs);
+                if (!needToHandle(msg, inputs)) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} skipped`);
+                    --cursorFromTail;
+                    ++handledMessages;
+                    continue;
+                }
+                const len = msg.msg.length;
+                core.debug(`comment = ${c.id}/${cursorFromTail - 1}, len = ${len}, total (before adding) = ${total}`);
+                if (total + len > inputs.promptLimit) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} cannot be added, will exceed promptLimit, ${total} + ${len} > ${inputs.promptLimit}`);
+                    break loop;
+                }
+                ++handledMessages;
+                --cursorFromTail;
+                total += len;
+                tailMsgs.push(msg);
+            }
+            --page;
+        }
+        core.debug(`step 3: handled messages ${handledMessages}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        if (msgs.length) {
+            const msg = cutMsgForDebug(tailMsgs[tailMsgs.length - 1].msg, 100);
+            core.debug(`step 3: last handled message: ${msg}`);
+        }
+
+        if (cursorFromBeginning + 1 === cursorFromTail) {
+            core.debug(`no separator`);
+        } else {
+            core.debug(`need separator`);
             msgs.push({
                 type: TYPE_SYSTEM,
                 msg: SEPARATOR,
@@ -17144,60 +17327,127 @@ async function formatAllMessages(inputs) {
 }
 
 async function run() {
+    const token = core.getInput("token");
+    core.debug(`token: ${token}`);
+    if (!token) {
+        throw new Error('missing token');
+    }
+
+    const repository = process.env.GITHUB_REPOSITORY;
+    const repo = repository.split("/");
+    core.debug(`repository: ${inspectJson(repo)}`);
+
+    const issueNumber = core.getInput("issue-number");
+    if (!issueNumber) {
+        throw new Error('missing issue-number');
+    }
+
+    const octokit = github.getOctokit(token);
+
+    const inputs = {
+        token: token,
+        issueNumber: issueNumber,
+        repo: repo,
+        octokit: octokit,
+    };
+
+    const issue = await getIssue(inputs);
+
+    let promptLimit = parseInt(core.getInput("prompt-limit") || '3000');
+    let promptFromBeginningMax = parseInt(core.getInput("prompt-from-beginning-max") || '500');
+    let promptFromTailInitialMax = parseInt(core.getInput("prompt-from-tail-initial-max") || '0');
+    let showTokenUsageStr = core.getInput("show-token-usage") || 'false';
+    let promptExcludeAIResponseStr = core.getInput("prompt-exclude-ai-response") || 'false';
+    let trimMode = core.getInput("trim-mode") || TRIM_MODE_NORMAL;
+
+    for (const label of issue.data.labels) {
+        let name = label.name;
+        if (name.startsWith('chat-in-issue/')) {
+            name = name.substring('chat-in-issue/'.length);
+        } else {
+            core.debug(`skipping non chat-in-issue labels`);
+            continue;
+        }
+        core.debug(`read chat-in-issue tag: ${name}`);
+        const idx = name.indexOf('=');
+        const key = name.substring(0, idx).trim();
+        const value = name.substring(idx + '='.length).trim();
+        if (key === 'prompt-limit') {
+            promptLimit = parseInt(value);
+        } else if (key === 'prompt-from-beginning-max') {
+            promptFromBeginningMax = parseInt(value);
+        } else if (key === 'prompt-from-tail-initial-max') {
+            promptFromTailInitialMax = parseInt(value);
+        } else if (key === 'show-token-usage') {
+            showTokenUsageStr = value;
+        } else if (key === 'prompt-exclude-ai-response') {
+            promptExcludeAIResponseStr = value;
+        } else if (key === 'trim-mode') {
+            trimMode = value;
+        } else {
+            core.debug(`unknown key ${key}`);
+            continue;
+        }
+        core.info(`overriding chat-in-issue option from labels ${key}=${value}`);
+    }
+
     const prefixStr = core.getInput("prefix") || 'chat';
     let prefix = prefixStr.split(',').map(s => s.trim()).filter(s => !!s);
     if (prefix.length === 0) {
         prefix = ['chat'];
     }
+
     const whitelistStr = core.getInput("user-whitelist") || '.*';
     const whitelistStrArray = whitelistStr.split('\n').map(s => s.trim()).filter(s => !!s);
     let whitelist = whitelistStrArray.map(s => new RegExp(s));
     if (whitelist.length === 0) {
         whitelist = [/.*/];
     }
-    const promptLimit = parseInt(core.getInput("prompt-limit") || '3000');
-    const promptFromBeginningMax = parseInt(core.getInput("prompt-from-beginning-max") || '500');
+
     if (isNaN(promptLimit) || promptLimit <= 0) {
         throw new Error('invalid prompt-limit: must > 0');
     }
     if (isNaN(promptFromBeginningMax) || promptFromBeginningMax < 0 || promptFromBeginningMax > promptLimit) {
         throw new Error('invalid prompt-from-beginning-max: must >= 0 and <= promptLimit');
     }
-    const showTokenUsageStr = core.getInput("show-token-usage") || 'false';
+    if (isNaN(promptFromTailInitialMax) || promptFromTailInitialMax < 0 || promptFromTailInitialMax > promptLimit) {
+        throw new Error('invalid prompt-from-tail-initial-max: must >= 0 and <= promptLimit');
+    }
+
     if (showTokenUsageStr !== 'true' && showTokenUsageStr !== 'false') {
         throw new Error('invalid show-token-usage, must be "true" or "false"');
     }
 
-    const inputs = {
-        token: core.getInput("token"),
+    if (promptExcludeAIResponseStr !== 'true' && promptExcludeAIResponseStr !== 'false') {
+        throw new Error('invalid prompt-exclude-ai-response, must be "true" or "false"');
+    }
+
+    if (trimMode !== TRIM_MODE_NORMAL &&
+        trimMode !== TRIM_MODE_EACH_LINE &&
+        trimMode !== TRIM_MODE_NONE) {
+        throw new Error(`unknown trim-mode, must be "${TRIM_MODE_NORMAL}"` +
+            ` or "${TRIM_MODE_EACH_LINE}" or ` +
+            `"${TRIM_MODE_NONE}"`);
+    }
+
+    const __inputs = {
         openaiKey: core.getInput("openai-key"),
         model: core.getInput("model") || DEFAULT_MODEL,
-        issueNumber: core.getInput("issue-number"),
         commentId: core.getInput("comment-id"),
         prefix: prefix,
         whitelist: whitelist,
         promptLimit: promptLimit,
         promptFromBeginningMax: promptFromBeginningMax,
+        promptFromTailInitialMax: promptFromTailInitialMax,
         showTokenUsage: showTokenUsageStr === 'true',
+        promptExcludeAIResponse: promptExcludeAIResponseStr === 'true',
+        trimMode: trimMode,
     };
-    core.debug(`Inputs: ${inspectJson(inputs)}`);
-    if (!inputs.token) {
-        throw new Error('missing token');
-    }
-    if (!inputs.issueNumber) {
-        throw new Error('missing issue-number');
-    }
+    for (const k in __inputs) inputs[k] = __inputs[k];
+    core.info(`inputs = ${inspectJson(inputs)}`);
     if (!inputs.openaiKey) {
         throw new Error('missing openai-key');
     }
-
-    const repository = process.env.GITHUB_REPOSITORY;
-    const repo = repository.split("/");
-    core.debug(`repository: ${inspectJson(repo)}`);
-    inputs.repo = repo;
-
-    const octokit = github.getOctokit(inputs.token);
-    inputs.octokit = octokit;
 
     if (inputs.commentId) {
         const comment = await octokit.rest.issues.getComment({
@@ -17205,9 +17455,9 @@ async function run() {
             repo: repo[1],
             comment_id: inputs.commentId,
         });
-        core.debug(`comment: ${inspectJson(comment.data)}`);
+        // core.debug(`comment: ${inspectJson(comment.data)}`);
         const body = comment.data.body || '';
-        const prefixCheck = checkPrefix(body, inputs.prefix);
+        const prefixCheck = checkPrefix(body, inputs);
         if (!prefixCheck) {
             core.debug(`should not handle this msg`);
             core.info(`this message will not be handled`);
@@ -17250,7 +17500,7 @@ async function main() {
     try {
         await run();
     } catch (error) {
-        core.debug(inspect(error));
+        core.error(inspect(error));
         core.setFailed(error.message);
         if (error.message === 'Resource not accessible by integration') {
             core.error(`See this action's readme for details about this error`);
