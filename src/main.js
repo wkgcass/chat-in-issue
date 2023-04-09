@@ -86,7 +86,7 @@ async function handle(msgs, inputs) {
     const CONTENT_PRINT_LIMIT = 20;
     for (const msg of openaiMsgs) {
         const content = cutMsgForDebug(msg.content, CONTENT_PRINT_LIMIT);
-        core.info(`\trole=${msg.role}\tname=${msg.name}\tlen=${content.length}\tcontent=${content}`);
+        core.info(`\trole=${msg.role}\tname=${msg.name}\tlen=${msg.content.length}\tcontent=${content}`);
     }
     core.info(`]`);
 
@@ -130,12 +130,17 @@ async function handle(msgs, inputs) {
     }
 }
 
+function trim(s) {
+    return s.split('\n').map(line => line.trim()).filter(line => !!line).join('\n');
+}
+
+// return null if no prefix matches
 function checkPrefix(msg, prefix) {
     for (const p of prefix) {
         const fmt = '/' + p + ':';
         if (msg.startsWith(fmt)) {
             core.debug(`msg starts with ${fmt}`);
-            return msg.substring(fmt.length).trim();
+            return trim(msg.substring(fmt.length));
         }
     }
     return null;
@@ -177,7 +182,7 @@ function extractMessageFromIssue(issue, inputs) {
     let issueUser = issue.data.user.login;
     let issueContent = issue.data.body;
     if (issueContent.startsWith(SYSTEM_PREFIX)) {
-        issueContent = issueContent.substring(SYSTEM_PREFIX.length).trim();
+        issueContent = trim(issueContent.substring(SYSTEM_PREFIX.length));
         type = TYPE_SYSTEM;
         issueUser = undefined;
     } else {
@@ -205,13 +210,13 @@ function handleComment(c, inputs) {
     let msg = c.body || '';
     let type = TYPE_PLAIN;
     if (msg.startsWith(ASSISTANT_PREFIX)) {
-        msg = msg.substring(ASSISTANT_PREFIX.length).trim();
+        msg = trim(msg.substring(ASSISTANT_PREFIX.length));
         type = TYPE_ASSISTANT;
         user = ROLE_ASSISTANT;
     } else if (msg.startsWith(DROP_PREFIX)) {
         return;
     } else if (msg.startsWith(SYSTEM_PREFIX)) {
-        msg = msg.substring(SYSTEM_PREFIX.length).trim();
+        msg = trim(msg.substring(SYSTEM_PREFIX.length));
         type = TYPE_SYSTEM;
         user = undefined;
     } else {
@@ -220,7 +225,7 @@ function handleComment(c, inputs) {
             msg = fmtMsg;
             type = TYPE_PROMPT;
         } else {
-            msg = msg.trim();
+            msg = trim(msg);
         }
     }
     if (msg === SUBMIT_ONLY_MESSAGE) {
@@ -257,6 +262,7 @@ async function formatAllMessages(inputs) {
 
         const perPage = 11; // use a prime number
         let page = parseInt(commentSize / perPage) + ((commentSize % perPage) === 0 ? 0 : 1); // last page
+        let handledMessages = 0;
 
         loop:
         while (true) {
@@ -270,20 +276,23 @@ async function formatAllMessages(inputs) {
                 if (!msg) {
                     core.debug(`comment ${c.id}/${cursorFromTail - 1} skipped`);
                     --cursorFromTail;
+                    ++handledMessages;
                     continue;
                 }
                 const len = msg.msg.length;
                 core.debug(`comment = ${c.id}/${cursorFromTail - 1}, len = ${len}, total (before adding) = ${total}`);
                 if (total + len > inputs.promptFromTailInitialMax) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} cannot be added, will exceed promptFromTailInitialMax, ${total} + ${len} > ${inputs.promptFromTailInitialMax}`);
                     break loop;
                 }
+                ++handledMessages;
                 --cursorFromTail;
                 total += len;
                 tailMsgs.push(msg);
             }
             --page;
         }
-        core.debug(`step 1: handled messages ${tailMsgs.length}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        core.debug(`step 1: handled messages ${handledMessages}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
         if (tailMsgs.length) {
             const msg = cutMsgForDebug(tailMsgs[tailMsgs.length - 1].msg, 100);
             core.debug(`step 1: last handled message: ${msg}`);
@@ -327,6 +336,7 @@ async function formatAllMessages(inputs) {
         total += msgs[0].msg.length; // count the issue body into total
         let beginning = msgs[0].msg.length;
         ++cursorFromBeginning; // issue body handled
+        let handledMessages = 1;
 
         let page = 1;
         const perPage = 11; // use a prime number
@@ -345,18 +355,20 @@ async function formatAllMessages(inputs) {
                 if (!msg) {
                     core.debug(`comment ${c.id}/${cursorFromBeginning + 1} skipped`);
                     ++cursorFromBeginning;
+                    ++handledMessages;
                     continue;
                 }
                 const len = msg.msg.length;
                 core.debug(`comment = ${c.id}/${cursorFromBeginning + 1}, len = ${len}, beginning (before adding) = ${beginning}, total = ${total}`);
                 if (beginning + len > inputs.promptFromBeginningMax) {
-                    core.debug(`exceeds promptFromBeginningMax ${inputs.promptFromBeginningMax}`);
+                    core.debug(`comment ${c.id}/${cursorFromBeginning + 1} cannot be added, will exceed promptFromBeginningMax, ${beginning} + ${len} > ${inputs.promptFromBeginningMax}`);
                     break loop;
                 }
                 if (total + len > inputs.promptLimit) {
-                    core.debug(`exceeds promptLimit ${inputs.promptLimit}`);
+                    core.debug(`comment ${c.id}/${cursorFromBeginning + 1} cannot be added, will exceed promptLimit, ${total} + ${len} > ${inputs.promptLimit}`);
                     break loop;
                 }
+                ++handledMessages;
                 ++cursorFromBeginning;
                 beginning += len;
                 total += len;
@@ -364,7 +376,7 @@ async function formatAllMessages(inputs) {
             }
             ++page;
         }
-        core.debug(`step 2: handled messages ${msgs.length}, total = ${total} beginning = ${beginning}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        core.debug(`step 2: handled messages ${handledMessages}, total = ${total} beginning = ${beginning}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
         if (msgs.length) {
             const msg = cutMsgForDebug(msgs[msgs.length - 1].msg, 100);
             core.debug(`step 2: last handled message: ${msg}`);
@@ -384,8 +396,9 @@ async function formatAllMessages(inputs) {
     {
         const perPage = 29; // use a prime number
         let page = parseInt((cursorFromTail - 1) / perPage) + (((cursorFromTail - 1) % perPage === 0) ? 0 : 1);
+        let handledMessages = 0;
 
-        core.debug(`step 3: trying to get messages from the tail...`);
+        core.debug(`step 3: trying to get messages from the tail with limit ${inputs.promptLimit}, cursorFromTail=${cursorFromTail}`);
 
         let isFirstLoop = true;
         loop:
@@ -407,20 +420,25 @@ async function formatAllMessages(inputs) {
                 const c = comments.data[i];
                 const msg = handleComment(c, inputs);
                 if (!msg) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} skipped`);
                     --cursorFromTail;
+                    ++handledMessages;
                     continue;
                 }
                 const len = msg.msg.length;
+                core.debug(`comment = ${c.id}/${cursorFromTail - 1}, len = ${len}, total (before adding) = ${total}`);
                 if (total + len > inputs.promptLimit) {
+                    core.debug(`comment ${c.id}/${cursorFromTail - 1} cannot be added, will exceed promptLimit, ${total} + ${len} > ${inputs.promptLimit}`);
                     break loop;
                 }
+                ++handledMessages;
                 --cursorFromTail;
                 total += len;
                 tailMsgs.push(msg);
             }
             --page;
         }
-        core.debug(`step 3: handled messages ${tailMsgs.length}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
+        core.debug(`step 3: handled messages ${handledMessages}, total = ${total}, cursorFromBeginning = ${cursorFromBeginning}, cursorFromTail = ${cursorFromTail}`);
         if (msgs.length) {
             const msg = cutMsgForDebug(tailMsgs[tailMsgs.length - 1].msg, 100);
             core.debug(`step 3: last handled message: ${msg}`);
@@ -444,20 +462,77 @@ async function formatAllMessages(inputs) {
 }
 
 async function run() {
+    const token = core.getInput("token");
+    core.debug(`token: ${token}`);
+    if (!token) {
+        throw new Error('missing token');
+    }
+
+    const repository = process.env.GITHUB_REPOSITORY;
+    const repo = repository.split("/");
+    core.debug(`repository: ${inspectJson(repo)}`);
+
+    const issueNumber = core.getInput("issue-number");
+    if (!issueNumber) {
+        throw new Error('missing issue-number');
+    }
+
+    const octokit = github.getOctokit(token);
+
+    const inputs = {
+        token: token,
+        issueNumber: issueNumber,
+        repo: repo,
+        octokit: octokit,
+    };
+
+    const issue = await getIssue(inputs);
+
+    let promptLimit = parseInt(core.getInput("prompt-limit") || '3000');
+    let promptFromBeginningMax = parseInt(core.getInput("prompt-from-beginning-max") || '500');
+    let promptFromTailInitialMax = parseInt(core.getInput("prompt-from-tail-initial-max") || '0');
+    let showTokenUsageStr = core.getInput("show-token-usage") || 'false';
+
+    for (const label of issue.data.labels) {
+        let name = label.name;
+        if (name.startsWith('chat-in-issue/')) {
+            name = name.substring('chat-in-issue/'.length);
+        } else {
+            core.debug(`skipping non chat-in-issue labels`);
+            continue;
+        }
+        core.debug(`read chat-in-issue tag: ${name}`);
+        const idx = name.indexOf('=');
+        const key = name.substring(0, idx).trim();
+        const value = name.substring(idx + '='.length).trim();
+        if (key === 'prompt-limit') {
+            promptLimit = parseInt(value);
+        } else if (key === 'prompt-from-beginning-max') {
+            promptFromBeginningMax = parseInt(value);
+        } else if (key === 'prompt-from-tail-initial-max') {
+            promptFromTailInitialMax = parseInt(value);
+        } else if (key === 'show-token-usage') {
+            showTokenUsageStr = value;
+        } else {
+            core.debug(`unknown key ${key}`);
+            continue;
+        }
+        core.info(`overriding chat-in-issue option from labels ${key}=${value}`);
+    }
+
     const prefixStr = core.getInput("prefix") || 'chat';
     let prefix = prefixStr.split(',').map(s => s.trim()).filter(s => !!s);
     if (prefix.length === 0) {
         prefix = ['chat'];
     }
+
     const whitelistStr = core.getInput("user-whitelist") || '.*';
     const whitelistStrArray = whitelistStr.split('\n').map(s => s.trim()).filter(s => !!s);
     let whitelist = whitelistStrArray.map(s => new RegExp(s));
     if (whitelist.length === 0) {
         whitelist = [/.*/];
     }
-    const promptLimit = parseInt(core.getInput("prompt-limit") || '3000');
-    const promptFromBeginningMax = parseInt(core.getInput("prompt-from-beginning-max") || '500');
-    const promptFromTailInitialMax = parseInt(core.getInput("prompt-from-tail-initial-max") || '0');
+
     if (isNaN(promptLimit) || promptLimit <= 0) {
         throw new Error('invalid prompt-limit: must > 0');
     }
@@ -467,16 +542,14 @@ async function run() {
     if (isNaN(promptFromTailInitialMax) || promptFromTailInitialMax < 0 || promptFromTailInitialMax > promptLimit) {
         throw new Error('invalid prompt-from-tail-initial-max: must >= 0 and <= promptLimit');
     }
-    const showTokenUsageStr = core.getInput("show-token-usage") || 'false';
+
     if (showTokenUsageStr !== 'true' && showTokenUsageStr !== 'false') {
         throw new Error('invalid show-token-usage, must be "true" or "false"');
     }
 
-    const inputs = {
-        token: core.getInput("token"),
+    const __inputs = {
         openaiKey: core.getInput("openai-key"),
         model: core.getInput("model") || DEFAULT_MODEL,
-        issueNumber: core.getInput("issue-number"),
         commentId: core.getInput("comment-id"),
         prefix: prefix,
         whitelist: whitelist,
@@ -485,24 +558,11 @@ async function run() {
         promptFromTailInitialMax: promptFromTailInitialMax,
         showTokenUsage: showTokenUsageStr === 'true',
     };
+    for (const k in __inputs) inputs[k] = __inputs[k];
     core.info(`inputs = ${inspectJson(inputs)}`);
-    if (!inputs.token) {
-        throw new Error('missing token');
-    }
-    if (!inputs.issueNumber) {
-        throw new Error('missing issue-number');
-    }
     if (!inputs.openaiKey) {
         throw new Error('missing openai-key');
     }
-
-    const repository = process.env.GITHUB_REPOSITORY;
-    const repo = repository.split("/");
-    core.debug(`repository: ${inspectJson(repo)}`);
-    inputs.repo = repo;
-
-    const octokit = github.getOctokit(inputs.token);
-    inputs.octokit = octokit;
 
     if (inputs.commentId) {
         const comment = await octokit.rest.issues.getComment({
