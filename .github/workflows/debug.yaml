@@ -25,4 +25,5 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: '16'
-      - run: node compile/index.js
+      - run: npm install
+      - run: node src/main.js
