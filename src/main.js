@@ -77,11 +77,12 @@ async function handle(msgs, inputs) {
     const CONTENT_PRINT_CUT_SUFFIX = '...';
     for (const msg of openaiMsgs) {
         let content = msg.content;
+        const len = content.length;
         if (content.length > CONTENT_PRINT_LIMIT + CONTENT_PRINT_CUT_SUFFIX.length) {
             content = content.substring(0, CONTENT_PRINT_LIMIT) + CONTENT_PRINT_CUT_SUFFIX;
         }
         content = content.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        core.info(`  role=${msg.role} name=${msg.name} content=${content}`);
+        core.info(`\trole=${msg.role}\tname=${msg.name}\tlen=${len}\tcontent=${content}`);
     }
     core.info(`]`);
 
