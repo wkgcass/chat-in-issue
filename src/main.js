@@ -149,10 +149,11 @@ async function handle(msgs, inputs) {
     }
 }
 
-function trim(s, inputs) {
-    if (inputs.trimMode === TRIM_MODE_EACH_LINE) {
+function trim(s, inputs, overrideTrim) {
+    const trimMode = overrideTrim || inputs.trimMode;
+    if (trimMode === TRIM_MODE_EACH_LINE) {
         return s.split('\n').map(line => line.trim()).filter(line => !!line).join('\n');
-    } else if (inputs.trimMode === TRIM_MODE_NONE) {
+    } else if (trimMode === TRIM_MODE_NONE) {
         return s;
     } else {
         return s.trim();
@@ -235,7 +236,7 @@ function handleComment(c, inputs) {
     let msg = c.body || '';
     let type = TYPE_PLAIN;
     if (msg.startsWith(ASSISTANT_PREFIX)) {
-        msg = trim(msg.substring(ASSISTANT_PREFIX.length), inputs);
+        msg = trim(msg.substring(ASSISTANT_PREFIX.length), inputs, TRIM_MODE_NORMAL);
         type = TYPE_ASSISTANT;
         user = ROLE_ASSISTANT;
     } else if (msg.startsWith(DROP_PREFIX)) {
